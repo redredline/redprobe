@@ -16,7 +16,8 @@ Job kinds:
   rednode.tcp    {"id", "kind", "host", "port", "sni"?}   TCP connect and, with sni, a TLS handshake
 
 Config: a file (default ~/.config/redprobe/redprobe.conf, KEY=VALUE) or environment variables with the same names:
-  REDPROBE_SERVER, REDPROBE_NAME, REDPROBE_REGION, REDPROBE_ENROLL_TOKEN (first run only),
+  REDPROBE_SERVER (one URL or several, comma separated; default https://probe.redstudio.site:8444, then
+  https://atlas.redstudio.site), REDPROBE_NAME, REDPROBE_REGION, REDPROBE_ENROLL_TOKEN (first run only),
   REDPROBE_ID and REDPROBE_SECRET (written after registration), REDPROBE_MAX_PPS (default 20), REDPROBE_WORKERS
   (default 16), REDPROBE_MAX_JOBS (default 500), REDPROBE_KINDS (default atlas.ping,atlas.tls1620).
 The probe runs only the kinds in REDPROBE_KINDS and skips any other job the server sends; rednode.* runs only where
@@ -38,8 +39,11 @@ import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import urlparse
 
-VERSION = "0.2.2"
+VERSION = "0.2.3"
 CONF = os.environ.get("REDPROBE_CONF", os.path.expanduser("~/.config/redprobe/redprobe.conf"))
+# The first address is a relay on a server in Russia: some Russian home ISPs cannot reach the Atlas server abroad.
+# When an address does not answer, the probe moves on to the next one and stays there while it works.
+SERVERS = ["https://probe.redstudio.site:8444", "https://atlas.redstudio.site"]
 ALL_KINDS = ["atlas.ping", "atlas.tls1620", "rednode.tcp"]
 DEFAULT_KINDS = ["atlas.ping", "atlas.tls1620"]
 
@@ -72,17 +76,52 @@ def save_conf(cfg):
 
 
 # ---------------- transport ----------------
+_active = {"i": 0}
+
+
+def servers(cfg):
+    """REDPROBE_SERVER, and for the Atlas addresses the other Atlas address as a fallback."""
+    out = [u.strip().rstrip("/") for u in cfg.get("REDPROBE_SERVER", "").replace(" ", ",").split(",") if u.strip()] or list(SERVERS)
+    if any(u in SERVERS for u in out):
+        out += [u for u in SERVERS if u not in out]
+    return out
+
+
 def call(cfg, method, path, body=None, signed=True):
     data = json.dumps(body).encode() if body is not None else b""
     h = {"Content-Type": "application/json", "User-Agent": f"redprobe/{VERSION}"}
-    if signed:
+    if signed:  # the signature covers id, time and body only, so it stays valid through the relay
         ts = str(int(time.time()))
         pid = cfg["REDPROBE_ID"]
         h["X-Probe-Id"], h["X-Probe-Ts"] = pid, ts
         h["X-Probe-Sig"] = hmac.new(cfg["REDPROBE_SECRET"].encode(), f"{pid}|{ts}|".encode() + data, hashlib.sha256).hexdigest()
-    req = urllib.request.Request(cfg["REDPROBE_SERVER"].rstrip("/") + path, data=data or None, method=method, headers=h)
-    with urllib.request.urlopen(req, timeout=60) as r:
-        return json.load(r)
+    urls, err = servers(cfg), None
+    for k in range(len(urls)):
+        i = (_active["i"] + k) % len(urls)
+        req = urllib.request.Request(urls[i] + path, data=data or None, method=method, headers=h)
+        try:
+            with urllib.request.urlopen(req, timeout=30) as r:
+                out = json.load(r)
+        except urllib.error.HTTPError as e:
+            try:
+                e.payload = json.loads(e.read() or b"{}")
+            except ValueError:
+                e.payload = {}
+            if e.code < 500 or e.payload.get("error"):
+                raise  # the Atlas server answered; another address leads to the same server
+            err = e  # a gateway error from the relay: try the next address
+            if k < len(urls) - 1:
+                print(f"{urls[i]} answered HTTP {e.code}, trying {urls[(i + 1) % len(urls)]}", file=sys.stderr, flush=True)
+            continue
+        except (urllib.error.URLError, OSError) as e:
+            err = e
+            if k < len(urls) - 1:
+                print(f"{urls[i]} does not answer ({getattr(e, 'reason', e)}), trying {urls[(i + 1) % len(urls)]}",
+                      file=sys.stderr, flush=True)
+            continue
+        _active["i"] = i
+        return out
+    raise err
 
 
 def enabled_kinds(cfg):
@@ -94,10 +133,7 @@ def register(cfg):
         r = call(cfg, "POST", "/probe/v1/register", {"enroll_token": cfg["REDPROBE_ENROLL_TOKEN"], "name": cfg.get("REDPROBE_NAME", socket.gethostname()),
                                                       "region": cfg.get("REDPROBE_REGION", ""), "version": VERSION, "kinds": enabled_kinds(cfg)}, signed=False)
     except urllib.error.HTTPError as e:  # the server explains a refusal (bad token, probe outside Russia) in "message"
-        try:
-            msg = json.load(e).get("message") or ""
-        except Exception:
-            msg = ""
+        msg = str(getattr(e, "payload", {}).get("message") or "")
         sys.exit(f"registration refused (HTTP {e.code}): {msg}" if msg else f"registration refused: HTTP {e.code}")
     cfg["REDPROBE_ID"], cfg["REDPROBE_SECRET"] = r["probe_id"], r["secret"]
     cfg.pop("REDPROBE_ENROLL_TOKEN", None)  # needed only to register, not kept
@@ -247,15 +283,13 @@ def once(cfg):
 
 def main():
     cfg = load_conf()
-    if "REDPROBE_SERVER" not in cfg:
-        sys.exit("REDPROBE_SERVER is not set (config file or environment)")
     if "REDPROBE_ID" not in cfg:
         if "REDPROBE_ENROLL_TOKEN" not in cfg:
             sys.exit("first run needs REDPROBE_ENROLL_TOKEN")
         cfg = register(cfg)
         print("registered as", cfg["REDPROBE_ID"])
     if "--register" in sys.argv:
-        print("probe id", cfg["REDPROBE_ID"], "server", cfg["REDPROBE_SERVER"])
+        print("probe id", cfg["REDPROBE_ID"], "server", servers(cfg)[_active["i"]])
         return
     if "--once" in sys.argv:
         once(cfg)

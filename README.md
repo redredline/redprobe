@@ -14,13 +14,13 @@ Red Atlas показывает, какие подсети хостеров се�
 
 `atlas.tls1620` скачивает по TLS первые 256 КБ открытого тестового файла хостера (сейчас это файлы для проверки скорости у Hetzner, OVH и Vultr) и записывает, на каком объёме передача встала. Так видно, режет ли сеть соединение после первых 16-20 КБ. На сервере Атласа эта проверка пока выключена.
 
-В ICMP-пакете проба пишет слово `redprobe`, а в запросе к тестовому файлу представляется как `redprobe/0.2.2`, так что хостер может понять, кто к нему пришёл.
+В ICMP-пакете проба пишет слово `redprobe`, а в запросе к тестовому файлу представляется как `redprobe/0.2.3`, так что хостер может понять, кто к нему пришёл.
 
 ## Чего проба не делает
 
 Проба не открывает портов и ничего не слушает: все соединения она начинает сама. Root ей не нужен, из зависимостей только Python 3.8 или новее. Через неё не идёт чужой трафик, она не читает ваш трафик и не отправляет его содержимое. Среди адресов, к которым она обращается, бывают заблокированные в России, ради их поиска пробу и ставят. Страниц проба не открывает и ничего не скачивает, кроме тестовых файлов хостеров.
 
-Задания других видов проба пропускает, даже если сервер их пришлёт: выполняются только виды из настройки `REDPROBE_KINDS`, по умолчанию там `atlas.ping` и `atlas.tls1620`. Весь код лежит в одном файле `redprobe.py` на 273 строки.
+Задания других видов проба пропускает, даже если сервер их пришлёт: выполняются только виды из настройки `REDPROBE_KINDS`, по умолчанию там `atlas.ping` и `atlas.tls1620`. Весь код лежит в одном файле `redprobe.py` на 307 строк.
 
 ## Сколько ресурсов уходит
 
@@ -30,7 +30,9 @@ Red Atlas показывает, какие подсети хостеров се�
 
 ## Приватность
 
-При регистрации проба отправляет имя и регион, которые вы указали при установке, свою версию и список видов заданий. Потом на сервер уходят только результаты: ответил ли адрес, время ответа и способ проверки (ICMP или TCP с номером порта), а для теста 16-20 ещё число полученных байт, признак того, что передача встала, и текст ошибки, если она была. Ничего о вашем компьютере и вашей сети проба не собирает. Соединение с сервером Атласа идёт по HTTPS с проверкой сертификата, запросы подписаны секретом пробы (HMAC-SHA256).
+При регистрации проба отправляет имя и регион, которые вы указали при установке, свою версию и список видов заданий. Потом на сервер уходят только результаты: ответил ли адрес, время ответа и способ проверки (ICMP или TCP с номером порта), а для теста 16-20 ещё число полученных байт, признак того, что передача встала, и текст ошибки, если она была. Ничего о вашем компьютере и вашей сети проба не собирает. Соединение идёт по HTTPS с проверкой сертификата, запросы подписаны секретом пробы (HMAC-SHA256).
+
+Проба ходит на два адреса. Сначала на ретранслятор `https://probe.redstudio.site:8444` на нашем сервере в Москве, потому что у части российских домашних провайдеров сервер Атласа за границей не открывается. Ретранслятор пропускает только запросы пробы, передаёт их серверу Атласа вместе с IP-адресом пробы и журналов не ведёт. Если он не отвечает, проба идёт напрямую на `https://atlas.redstudio.site`.
 
 IP-адрес пробы сервер Атласа видит, как любой сайт видит адрес посетителя. При регистрации сервер один раз определяет по нему сеть: отправляет адрес в открытую базу [RIPEstat](https://stat.ripe.net) (сервис RIPE NCC) и сохраняет только номер AS, имя сети, страну и примерный город. Сам адрес в базу Атласа не записывается, журналов запросов на сервере нет. Если адрес не в России, регистрация не проходит: точки за пределами России мы подключаем только по договорённости. Свою автономную систему проба не проверяет, поэтому VPS у российского хостера не мерит сети этого хостера изнутри.
 
@@ -67,7 +69,7 @@ IP-адрес пробы сервер Атласа видит, как любой
    ```sh
    git clone https://github.com/redredline/redprobe
    cd redprobe
-   sh install.sh https://atlas.redstudio.site ТОКЕН ИМЯ РЕГИОН
+   sh install.sh https://probe.redstudio.site:8444 ТОКЕН ИМЯ РЕГИОН
    ```
 
    Бот подставляет токен, имя и регион сам. Имя видим только мы, например `home-msk`. Регион пишите латиницей: `ru-msk`, `ru-spb`, `ru-ekb`. Регион, который начинается с `control`, означает зарубежную контрольную точку. Такие пробы могут получать другие задания (поиск шлюзов новых подсетей), поэтому ставьте его только по договорённости с нами.
@@ -99,7 +101,7 @@ systemctl --user daemon-reload
 
 Настройки лежат в `~/.config/redprobe/redprobe.conf` в виде `КЛЮЧ=значение`, те же ключи можно передать переменными окружения. После правки файла перезапустите пробу: `systemctl --user restart redprobe`.
 
-- `REDPROBE_SERVER` задаёт адрес сервера Атласа, `https://atlas.redstudio.site`.
+- `REDPROBE_SERVER` задаёт адрес сервера, можно несколько через запятую. По умолчанию это ретранслятор `https://probe.redstudio.site:8444`, а если он не отвечает, `https://atlas.redstudio.site`. Если указан один из этих двух адресов, второй проба добавляет запасным сама.
 - `REDPROBE_NAME` задаёт имя пробы, его видим только мы. По умолчанию берётся имя компьютера.
 - `REDPROBE_REGION` задаёт регион, например `ru-msk`.
 - `REDPROBE_ENROLL_TOKEN` хранит токен до регистрации, потом проба его стирает.
@@ -113,7 +115,7 @@ systemctl --user daemon-reload
 Виды заданий сервер запоминает при регистрации. Чтобы с самого начала отказаться от теста 16-20 и его трафика, ставьте пробу так:
 
 ```sh
-REDPROBE_KINDS=atlas.ping sh install.sh https://atlas.redstudio.site ТОКЕН ИМЯ РЕГИОН
+REDPROBE_KINDS=atlas.ping sh install.sh https://probe.redstudio.site:8444 ТОКЕН ИМЯ РЕГИОН
 ```
 
 Если убрать вид из `REDPROBE_KINDS` уже после регистрации, сервер продолжит присылать такие задания, а проба будет их пропускать и писать об этом в журнал.
@@ -164,13 +166,13 @@ About every five minutes the probe fetches a batch of jobs from the Atlas server
 
 `atlas.tls1620` downloads the first 256 KB of a hoster's public speed test file over TLS (currently Hetzner, OVH and Vultr) and records where the transfer stalled, which shows whether the network cuts connections after the first 16-20 KB. This check is switched off on the Atlas server for now.
 
-ICMP packets carry the word `redprobe`, and requests for test files identify themselves as `redprobe/0.2.2`, so a hoster can tell where they come from.
+ICMP packets carry the word `redprobe`, and requests for test files identify themselves as `redprobe/0.2.3`, so a hoster can tell where they come from.
 
 ### What it does not do
 
 The probe opens no ports and listens on nothing; it only makes outbound connections. It needs no root and nothing beyond Python 3.8 or newer. It does not relay anyone's traffic, does not read your traffic and sends none of its content. Some of the addresses it contacts are blocked in Russia, which is what the measurements are meant to find. It opens no web pages and downloads nothing except the hosters' test files.
 
-The probe skips jobs of any other kind even if the server sends them: it runs only the kinds listed in `REDPROBE_KINDS`, which defaults to `atlas.ping` and `atlas.tls1620`. All the code is one 273-line file, `redprobe.py`.
+The probe skips jobs of any other kind even if the server sends them: it runs only the kinds listed in `REDPROBE_KINDS`, which defaults to `atlas.ping` and `atlas.tls1620`. All the code is one 307-line file, `redprobe.py`.
 
 ### Resources
 
@@ -180,7 +182,9 @@ We estimated traffic from request sizes: about 85 KB of JSON per batch plus 100 
 
 ### Privacy
 
-At registration the probe sends the name and region you gave at install, its version and the list of job kinds. After that it sends only results: whether the address answered, the response time and the method (ICMP, or TCP with the port), plus for the 16-20 test the byte count, whether the transfer stalled and the error text if there was one. It collects nothing about your computer or your network. The connection to the Atlas server is HTTPS with certificate checks, and requests are signed with the probe's secret (HMAC-SHA256).
+At registration the probe sends the name and region you gave at install, its version and the list of job kinds. After that it sends only results: whether the address answered, the response time and the method (ICMP, or TCP with the port), plus for the 16-20 test the byte count, whether the transfer stalled and the error text if there was one. It collects nothing about your computer or your network. Connections use HTTPS with certificate checks, and requests are signed with the probe's secret (HMAC-SHA256).
+
+The probe knows two addresses. It tries the relay `https://probe.redstudio.site:8444` on our server in Moscow first, because some Russian home ISPs cannot reach the Atlas server abroad. The relay passes only probe requests, forwards them to the Atlas server together with the probe's IP address and keeps no logs. If the relay does not answer, the probe goes straight to `https://atlas.redstudio.site`.
 
 The Atlas server sees the probe's IP address the way any website sees a visitor's address. At registration it looks the network up once: it sends the address to the public [RIPEstat](https://stat.ripe.net) database (run by RIPE NCC) and keeps only the AS number, the network name, the country and an approximate city. The address itself is not written to the Atlas database, and the server keeps no request logs. If the address is not in Russia, registration fails: probes outside Russia join only by arrangement with us. A probe never checks its own autonomous system, so a VPS at a Russian hoster does not measure that hoster's networks from the inside.
 
@@ -217,7 +221,7 @@ You need a Linux server or a home computer running Linux with Python 3.8 or newe
    ```sh
    git clone https://github.com/redredline/redprobe
    cd redprobe
-   sh install.sh https://atlas.redstudio.site TOKEN NAME REGION
+   sh install.sh https://probe.redstudio.site:8444 TOKEN NAME REGION
    ```
 
    The bot fills in the token, name and region for you. Only we see the name, for example `home-msk`. Write the region in Latin letters: `ru-msk`, `ru-spb`, `ru-ekb`. A region starting with `control` marks a foreign control point. Such probes may get other jobs (finding gateways of new subnets), so use it only after agreeing with us.
@@ -249,7 +253,7 @@ If no other service of yours needs lingering, turn it off with `loginctl disable
 
 Settings live in `~/.config/redprobe/redprobe.conf` as `KEY=value`; environment variables with the same names work too. Restart the probe after editing the file: `systemctl --user restart redprobe`.
 
-- `REDPROBE_SERVER` sets the Atlas server address, `https://atlas.redstudio.site`.
+- `REDPROBE_SERVER` sets the server address, several can be given comma separated. The default is the relay `https://probe.redstudio.site:8444`, then `https://atlas.redstudio.site` if the relay does not answer. When one of these two is set, the probe adds the other as a fallback itself.
 - `REDPROBE_NAME` sets the probe name, which only we see. It defaults to the host name.
 - `REDPROBE_REGION` sets the region, for example `ru-msk`.
 - `REDPROBE_ENROLL_TOKEN` holds the token until registration, then the probe removes it.
@@ -263,7 +267,7 @@ The `REDPROBE_CONF` variable changes the path to the settings file.
 The server remembers the job kinds at registration. To skip the 16-20 test and its traffic from the start, install like this:
 
 ```sh
-REDPROBE_KINDS=atlas.ping sh install.sh https://atlas.redstudio.site TOKEN NAME REGION
+REDPROBE_KINDS=atlas.ping sh install.sh https://probe.redstudio.site:8444 TOKEN NAME REGION
 ```
 
 If you remove a kind from `REDPROBE_KINDS` after registration, the server keeps sending those jobs and the probe skips them and notes it in the log.
