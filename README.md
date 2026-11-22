@@ -10,17 +10,17 @@ Red Atlas показывает, какие подсети хостеров се�
 
 Примерно раз в пять минут проба забирает у сервера Атласа пачку заданий, выполняет их и по HTTPS отправляет результаты обратно. Задания у неё двух видов.
 
-`atlas.ping` проверяет, отвечает ли один адрес в подсети /24 хостера, обычно шлюз .1 или .254. На этот же адрес смотрит карта Атласа. Если система разрешает пинг без root (настройка `net.ipv4.ping_group_range`), уходит один ICMP-запрос, иначе проба открывает TCP-соединение на порт 443, 80 или 22 и сразу его закрывает. У хостеров, которые раздают клиентам всю /24 целиком, такой адрес может оказаться сервером клиента хостера.
+`atlas.ping` проверяет, отвечает ли один адрес в подсети /24 хостера, обычно шлюз .1 или .254. На этот же адрес смотрит карта Атласа. Если система разрешает пинг без root (настройка `net.ipv4.ping_group_range`), уходит один ICMP-запрос, иначе проба открывает TCP-соединение на порт 443, 80 или 22 и сразу его закрывает. Многие шлюзы отвечают только на пинг, а по TCP молчат, даже когда открыты, поэтому ответ «не отвечает» от пробы, которая работает через TCP, Атлас не учитывает. Как включить пинг, написано в разделе «Как подключиться». У хостеров, которые раздают клиентам всю /24 целиком, такой адрес может оказаться сервером клиента хостера.
 
 `atlas.tls1620` скачивает по TLS первые 256 КБ открытого тестового файла хостера (сейчас это файлы для проверки скорости у Hetzner, OVH и Vultr) и записывает, на каком объёме передача встала. Так видно, режет ли сеть соединение после первых 16-20 КБ. На сервере Атласа эта проверка пока выключена.
 
-В ICMP-пакете проба пишет слово `redprobe`, а в запросе к тестовому файлу представляется как `redprobe/0.2.1`, так что хостер может понять, кто к нему пришёл.
+В ICMP-пакете проба пишет слово `redprobe`, а в запросе к тестовому файлу представляется как `redprobe/0.2.2`, так что хостер может понять, кто к нему пришёл.
 
 ## Чего проба не делает
 
 Проба не открывает портов и ничего не слушает: все соединения она начинает сама. Root ей не нужен, из зависимостей только Python 3.8 или новее. Через неё не идёт чужой трафик, она не читает ваш трафик и не отправляет его содержимое. Среди адресов, к которым она обращается, бывают заблокированные в России, ради их поиска пробу и ставят. Страниц проба не открывает и ничего не скачивает, кроме тестовых файлов хостеров.
 
-Задания других видов проба пропускает, даже если сервер их пришлёт: выполняются только виды из настройки `REDPROBE_KINDS`, по умолчанию там `atlas.ping` и `atlas.tls1620`. Весь код лежит в одном файле `redprobe.py` на 265 строк.
+Задания других видов проба пропускает, даже если сервер их пришлёт: выполняются только виды из настройки `REDPROBE_KINDS`, по умолчанию там `atlas.ping` и `atlas.tls1620`. Весь код лежит в одном файле `redprobe.py` на 273 строки.
 
 ## Сколько ресурсов уходит
 
@@ -32,7 +32,9 @@ Red Atlas показывает, какие подсети хостеров се�
 
 При регистрации проба отправляет имя и регион, которые вы указали при установке, свою версию и список видов заданий. Потом на сервер уходят только результаты: ответил ли адрес, время ответа и способ проверки (ICMP или TCP с номером порта), а для теста 16-20 ещё число полученных байт, признак того, что передача встала, и текст ошибки, если она была. Ничего о вашем компьютере и вашей сети проба не собирает. Соединение с сервером Атласа идёт по HTTPS с проверкой сертификата, запросы подписаны секретом пробы (HMAC-SHA256).
 
-IP-адрес пробы сервер Атласа видит, как любой сайт видит адрес посетителя. В базу Атласа он не записывается, журналов запросов на сервере нет. На страницах подсетей и в API проверка подписана случайным id пробы вида `probe:p1a2b3c4d5e6`, без имени, региона и IP.
+IP-адрес пробы сервер Атласа видит, как любой сайт видит адрес посетителя. При регистрации сервер один раз определяет по нему сеть: отправляет адрес в открытую базу [RIPEstat](https://stat.ripe.net) (сервис RIPE NCC) и сохраняет только номер AS, имя сети, страну и примерный город. Сам адрес в базу Атласа не записывается, журналов запросов на сервере нет. Если адрес не в России, регистрация не проходит: точки за пределами России мы подключаем только по договорённости. Свою автономную систему проба не проверяет, поэтому VPS у российского хостера не мерит сети этого хостера изнутри.
+
+Токен из бота привязан к вашему аккаунту Telegram. Вместе с пробой мы храним id этого аккаунта, тип подключения и город, которые вы указали в боте, чтобы бот мог показать ваши точки и написать, если с ними что-то не так. На страницах подсетей и в API проверка подписана случайным id пробы вида `probe:p1a2b3c4d5e6`, без имени, региона, аккаунта и IP.
 
 ### Red Node и адреса клиентов
 
@@ -42,11 +44,25 @@ IP-адрес пробы сервер Атласа видит, как любой
 
 ## Как подключиться
 
-Подойдёт Linux-сервер или домашний компьютер с Linux, где есть Python 3.8 или новее и systemd. Больше всего пользы от проб в российских сетях: домашний и мобильный интернет, российские VPS.
+Подойдёт Linux-сервер или домашний компьютер с Linux, где есть Python 3.8 или новее и systemd. Точки мы подключаем в российских сетях: домашний и мобильный интернет, российские VPS.
 
-1. Получите токен. Пока мы выдаём их вручную: напишите [@redlinefounder](https://t.me/redlinefounder) в Telegram, в каком городе будет стоять проба и через какого провайдера она выходит в интернет.
+1. Получите токен в боте [@redatlas_robot](https://t.me/redatlas_robot). Он спросит, откуда проба будет выходить в интернет (домашний, мобильный интернет или VPS в России) и в каком городе она стоит, и пришлёт готовую команду установки с токеном. Токен одноразовый и действует сутки, на один аккаунт Telegram можно подключить две точки.
 
-2. Поставьте пробу от обычного пользователя:
+2. Включите пинг без root. Это единственная команда, которой нужен sudo:
+
+   ```sh
+   sudo sysctl -w net.ipv4.ping_group_range="0 2147483647"
+   ```
+
+   Настройка действует до перезагрузки. Чтобы она осталась навсегда:
+
+   ```sh
+   echo 'net.ipv4.ping_group_range = 0 2147483647' | sudo tee /etc/sysctl.d/99-redprobe.conf
+   ```
+
+   Без этой настройки проба проверяет адреса через TCP. Её «отвечает» мы учитываем, а «не отвечает» нет, потому что многие шлюзы по TCP молчат, даже когда открыты. Пробу после этой команды перезапускать не нужно, следующая пачка пойдёт пингом.
+
+3. Поставьте пробу от обычного пользователя:
 
    ```sh
    git clone https://github.com/redredline/redprobe
@@ -54,18 +70,18 @@ IP-адрес пробы сервер Атласа видит, как любой
    sh install.sh https://atlas.redstudio.site ТОКЕН ИМЯ РЕГИОН
    ```
 
-   Имя видим только мы, например `home-msk`. Регион пишите латиницей: `ru-msk`, `ru-spb`, `ru-ekb`. Регион, который начинается с `control`, означает зарубежную контрольную точку. Такие пробы могут получать другие задания (поиск шлюзов новых подсетей), поэтому ставьте его только по договорённости с нами.
+   Бот подставляет токен, имя и регион сам. Имя видим только мы, например `home-msk`. Регион пишите латиницей: `ru-msk`, `ru-spb`, `ru-ekb`. Регион, который начинается с `control`, означает зарубежную контрольную точку. Такие пробы могут получать другие задания (поиск шлюзов новых подсетей), поэтому ставьте его только по договорённости с нами.
 
-   Скрипт кладёт `redprobe.py` в `~/.local/share/redprobe`, настройки в `~/.config/redprobe/redprobe.conf` с правами 600, регистрирует пробу и запускает её пользовательским сервисом systemd. Ещё он включает для вашего пользователя linger (`loginctl enable-linger`), иначе systemd остановит пробу, как только вы выйдете из системы, и не запустит после перезагрузки. После регистрации токен стирается из настроек, а проба получает свой id и секрет. Если systemd для пользователя недоступен, например в контейнере, скрипт напечатает команду запуска и строку для `crontab -e`.
+   Скрипт кладёт `redprobe.py` в `~/.local/share/redprobe`, настройки в `~/.config/redprobe/redprobe.conf` с правами 600, регистрирует пробу и запускает её пользовательским сервисом systemd. Ещё он включает для вашего пользователя linger (`loginctl enable-linger`), иначе systemd остановит пробу, как только вы выйдете из системы, и не запустит после перезагрузки. После регистрации токен стирается из настроек, а проба получает свой id и секрет. Если сервер отказал в регистрации, скрипт напечатает причину и остановится. Если systemd для пользователя недоступен, например в контейнере, скрипт напечатает команду запуска и строку для `crontab -e`.
 
-3. Проверьте, что проба работает:
+4. Проверьте, что проба работает:
 
    ```sh
    systemctl --user status redprobe
    journalctl --user -u redprobe -f
    ```
 
-   После каждой пачки в журнале появляется строка `batch:` с числом заданий, числом ответивших адресов и временем пачки.
+   После каждой пачки в журнале появляется строка `batch:` с числом заданий, числом ответивших адресов и временем пачки. Бот тоже напишет, когда точка подключится, а в разделе «Мои точки» покажет, в сети ли она и сколько проверок сделала за день.
 
 Остановить пробу на время можно командой `systemctl --user stop redprobe`, запустить снова `systemctl --user start redprobe`.
 
@@ -77,7 +93,7 @@ rm -rf ~/.local/share/redprobe ~/.config/redprobe ~/.config/systemd/user/redprob
 systemctl --user daemon-reload
 ```
 
-Если linger не нужен другим вашим сервисам, выключите его командой `loginctl disable-linger`. Напишите [@redlinefounder](https://t.me/redlinefounder), и мы удалим пробу на сервере.
+Если linger не нужен другим вашим сервисам, выключите его командой `loginctl disable-linger`. На сервере Атласа точку можно отключить в боте [@redatlas_robot](https://t.me/redatlas_robot), в разделе «Мои точки».
 
 ## Настройки
 
@@ -112,7 +128,7 @@ REDPROBE_KINDS=atlas.ping sh install.sh https://atlas.redstudio.site ТОКЕН 
 
 **Это законно?** Проба делает то же, что команды `ping` и `curl`: обращается к публичным адресам хостеров и скачивает их открытые тестовые файлы. Она ничего не обходит, не пропускает через себя чужой трафик и не открывает сайтов. Похожие измерения в России ведут сотни проб RIPE Atlas. Мы не юристы и гарантий дать не можем, поэтому если сомневаетесь, лучше не ставьте пробу.
 
-**Увидит ли кто-то мой IP?** Сервер Атласа видит его при каждом запросе, но не сохраняет. Хостеры, чьи адреса проверяет проба, видят ваш IP как источник пинга или соединения, так бывает при любом обращении к их адресам. На сайте Атласа и в API ваш IP и имя пробы не показываются.
+**Увидит ли кто-то мой IP?** Сервер Атласа видит его при каждом запросе, но не сохраняет. При регистрации адрес один раз уходит в RIPEstat, чтобы определить сеть и страну. Хостеры, чьи адреса проверяет проба, видят ваш IP как источник пинга или соединения, так бывает при любом обращении к их адресам. На сайте Атласа и в API ваш IP и имя пробы не показываются.
 
 **Может прийти жалоба на сканирование?** Может. Проба за несколько минут обращается к сотням адресов в разных сетях, и системы защиты некоторых хостеров считают такое сканированием. Мы держим скорость низкой и проверяем по одному адресу на подсеть, но жалобу на ваш IP исключить нельзя. Если ставите пробу на арендованный сервер, загляните в правила своего хостера. Скорость можно снизить через `REDPROBE_MAX_PPS` и `REDPROBE_MAX_JOBS`.
 
@@ -144,17 +160,17 @@ redprobe is a measurement probe for [Red Atlas](https://atlas.redstudio.site) by
 
 About every five minutes the probe fetches a batch of jobs from the Atlas server, runs them and sends the results back over HTTPS. There are two kinds of jobs.
 
-`atlas.ping` checks whether one address in a hoster's /24 answers, usually the gateway .1 or .254, the same address the Atlas map looks at. If the system allows unprivileged ping (`net.ipv4.ping_group_range`), the probe sends one ICMP echo; otherwise it opens a TCP connection to port 443, 80 or 22 and closes it at once. At hosters that hand a whole /24 to customers, that address may belong to a customer's server.
+`atlas.ping` checks whether one address in a hoster's /24 answers, usually the gateway .1 or .254, the same address the Atlas map looks at. If the system allows unprivileged ping (`net.ipv4.ping_group_range`), the probe sends one ICMP echo; otherwise it opens a TCP connection to port 443, 80 or 22 and closes it at once. Many gateways answer ping only and stay silent over TCP even when reachable, so Atlas ignores "no answer" from a probe that works over TCP; how to enable ping is under How to join. At hosters that hand a whole /24 to customers, that address may belong to a customer's server.
 
 `atlas.tls1620` downloads the first 256 KB of a hoster's public speed test file over TLS (currently Hetzner, OVH and Vultr) and records where the transfer stalled, which shows whether the network cuts connections after the first 16-20 KB. This check is switched off on the Atlas server for now.
 
-ICMP packets carry the word `redprobe`, and requests for test files identify themselves as `redprobe/0.2.1`, so a hoster can tell where they come from.
+ICMP packets carry the word `redprobe`, and requests for test files identify themselves as `redprobe/0.2.2`, so a hoster can tell where they come from.
 
 ### What it does not do
 
 The probe opens no ports and listens on nothing; it only makes outbound connections. It needs no root and nothing beyond Python 3.8 or newer. It does not relay anyone's traffic, does not read your traffic and sends none of its content. Some of the addresses it contacts are blocked in Russia, which is what the measurements are meant to find. It opens no web pages and downloads nothing except the hosters' test files.
 
-The probe skips jobs of any other kind even if the server sends them: it runs only the kinds listed in `REDPROBE_KINDS`, which defaults to `atlas.ping` and `atlas.tls1620`. All the code is one 265-line file, `redprobe.py`.
+The probe skips jobs of any other kind even if the server sends them: it runs only the kinds listed in `REDPROBE_KINDS`, which defaults to `atlas.ping` and `atlas.tls1620`. All the code is one 273-line file, `redprobe.py`.
 
 ### Resources
 
@@ -166,7 +182,9 @@ We estimated traffic from request sizes: about 85 KB of JSON per batch plus 100 
 
 At registration the probe sends the name and region you gave at install, its version and the list of job kinds. After that it sends only results: whether the address answered, the response time and the method (ICMP, or TCP with the port), plus for the 16-20 test the byte count, whether the transfer stalled and the error text if there was one. It collects nothing about your computer or your network. The connection to the Atlas server is HTTPS with certificate checks, and requests are signed with the probe's secret (HMAC-SHA256).
 
-The Atlas server sees the probe's IP address the way any website sees a visitor's address. It is not written to the Atlas database, and the server keeps no request logs. On subnet pages and in the API a check is labelled with the probe's random id, such as `probe:p1a2b3c4d5e6`, with no name, region or IP.
+The Atlas server sees the probe's IP address the way any website sees a visitor's address. At registration it looks the network up once: it sends the address to the public [RIPEstat](https://stat.ripe.net) database (run by RIPE NCC) and keeps only the AS number, the network name, the country and an approximate city. The address itself is not written to the Atlas database, and the server keeps no request logs. If the address is not in Russia, registration fails: probes outside Russia join only by arrangement with us. A probe never checks its own autonomous system, so a VPS at a Russian hoster does not measure that hoster's networks from the inside.
+
+A token from the bot is tied to your Telegram account. With the probe we keep that account's id and the connection type and city you gave the bot, so the bot can list your probes and tell you when something is wrong. On subnet pages and in the API a check is labelled with the probe's random id, such as `probe:p1a2b3c4d5e6`, with no name, region, account or IP.
 
 #### Red Node and customer addresses
 
@@ -176,11 +194,25 @@ Volunteers still help Red Node indirectly: we match the measured subnets against
 
 ### How to join
 
-You need a Linux server or a home computer running Linux with Python 3.8 or newer and systemd. Probes inside Russian networks help most: home broadband, mobile internet, Russian VPS.
+You need a Linux server or a home computer running Linux with Python 3.8 or newer and systemd. We connect probes inside Russian networks: home broadband, mobile internet, Russian VPS.
 
-1. Get a token. For now we hand them out by hand: message [@redlinefounder](https://t.me/redlinefounder) on Telegram with the city and the internet provider of the probe.
+1. Get a token from the bot [@redatlas_robot](https://t.me/redatlas_robot) (in Russian). It asks where the probe goes online (home broadband, mobile internet or a VPS in Russia) and in which city, then sends a ready install command with the token. A token works once and expires after 24 hours; one Telegram account can run two probes.
 
-2. Install as an ordinary user:
+2. Enable unprivileged ping. This is the only command that needs sudo:
+
+   ```sh
+   sudo sysctl -w net.ipv4.ping_group_range="0 2147483647"
+   ```
+
+   The setting lasts until reboot. To keep it:
+
+   ```sh
+   echo 'net.ipv4.ping_group_range = 0 2147483647' | sudo tee /etc/sysctl.d/99-redprobe.conf
+   ```
+
+   Without it the probe checks addresses over TCP. We count its "answers" but ignore its "no answer", because many gateways stay silent over TCP even when reachable. The probe needs no restart after the command; its next batch goes over ping.
+
+3. Install as an ordinary user:
 
    ```sh
    git clone https://github.com/redredline/redprobe
@@ -188,18 +220,18 @@ You need a Linux server or a home computer running Linux with Python 3.8 or newe
    sh install.sh https://atlas.redstudio.site TOKEN NAME REGION
    ```
 
-   Only we see the name, for example `home-msk`. Write the region in Latin letters: `ru-msk`, `ru-spb`, `ru-ekb`. A region starting with `control` marks a foreign control point. Such probes may get other jobs (finding gateways of new subnets), so use it only after agreeing with us.
+   The bot fills in the token, name and region for you. Only we see the name, for example `home-msk`. Write the region in Latin letters: `ru-msk`, `ru-spb`, `ru-ekb`. A region starting with `control` marks a foreign control point. Such probes may get other jobs (finding gateways of new subnets), so use it only after agreeing with us.
 
-   The script puts `redprobe.py` into `~/.local/share/redprobe` and the settings into `~/.config/redprobe/redprobe.conf` (mode 600), registers the probe and starts it as a systemd user service. It also enables lingering for your user (`loginctl enable-linger`); without it systemd stops the probe when you log out and does not start it after a reboot. After registration the token is removed from the settings and the probe gets its own id and secret. If systemd user services are unavailable, for example in a container, the script prints a start command and a line for `crontab -e`.
+   The script puts `redprobe.py` into `~/.local/share/redprobe` and the settings into `~/.config/redprobe/redprobe.conf` (mode 600), registers the probe and starts it as a systemd user service. It also enables lingering for your user (`loginctl enable-linger`); without it systemd stops the probe when you log out and does not start it after a reboot. After registration the token is removed from the settings and the probe gets its own id and secret. If the server refuses the registration, the script prints the reason and stops. If systemd user services are unavailable, for example in a container, the script prints a start command and a line for `crontab -e`.
 
-3. Check that it runs:
+4. Check that it runs:
 
    ```sh
    systemctl --user status redprobe
    journalctl --user -u redprobe -f
    ```
 
-   After each batch the log gets a `batch:` line with the number of jobs, the number of addresses that answered and the time the batch took.
+   After each batch the log gets a `batch:` line with the number of jobs, the number of addresses that answered and the time the batch took. The bot also tells you when the probe connects, and «Мои точки» there shows whether it is online and how many checks it ran today.
 
 To pause the probe run `systemctl --user stop redprobe`, and `systemctl --user start redprobe` to start it again.
 
@@ -211,7 +243,7 @@ rm -rf ~/.local/share/redprobe ~/.config/redprobe ~/.config/systemd/user/redprob
 systemctl --user daemon-reload
 ```
 
-If no other service of yours needs lingering, turn it off with `loginctl disable-linger`. Message [@redlinefounder](https://t.me/redlinefounder) and we will remove the probe on the server.
+If no other service of yours needs lingering, turn it off with `loginctl disable-linger`. To switch the probe off on the Atlas server, use «Мои точки» in [@redatlas_robot](https://t.me/redatlas_robot).
 
 ### Settings
 
@@ -246,7 +278,7 @@ Ping results go into a subnet's check history in Atlas, next to the RIPE Atlas a
 
 **Is it legal?** The probe does what `ping` and `curl` do: it contacts hosters' public addresses and downloads their public test files. It circumvents nothing, relays no traffic and opens no websites. Hundreds of RIPE Atlas probes run similar measurements in Russia. We are not lawyers and cannot give guarantees, so if in doubt, do not run it.
 
-**Will anyone see my IP?** The Atlas server sees it on every request and does not store it. Hosters whose addresses the probe checks see your IP as the source of the ping or connection, as with any traffic to their addresses. The Atlas site and API show neither your IP nor the probe's name.
+**Will anyone see my IP?** The Atlas server sees it on every request and does not store it. At registration the address goes to RIPEstat once to look up the network and country. Hosters whose addresses the probe checks see your IP as the source of the ping or connection, as with any traffic to their addresses. The Atlas site and API show neither your IP nor the probe's name.
 
 **Can I get a scanning complaint?** You can. The probe contacts hundreds of addresses in different networks within minutes, and some hosters' intrusion detection treats that as a scan. We keep the rate low and check one address per subnet, but a complaint about your IP cannot be ruled out. If you run the probe on a rented server, read your hoster's rules. `REDPROBE_MAX_PPS` and `REDPROBE_MAX_JOBS` lower the rate.
 

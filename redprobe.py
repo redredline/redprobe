@@ -33,11 +33,12 @@ import ssl
 import struct
 import sys
 import time
+import urllib.error
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import urlparse
 
-VERSION = "0.2.1"
+VERSION = "0.2.2"
 CONF = os.environ.get("REDPROBE_CONF", os.path.expanduser("~/.config/redprobe/redprobe.conf"))
 ALL_KINDS = ["atlas.ping", "atlas.tls1620", "rednode.tcp"]
 DEFAULT_KINDS = ["atlas.ping", "atlas.tls1620"]
@@ -89,8 +90,15 @@ def enabled_kinds(cfg):
 
 
 def register(cfg):
-    r = call(cfg, "POST", "/probe/v1/register", {"enroll_token": cfg["REDPROBE_ENROLL_TOKEN"], "name": cfg.get("REDPROBE_NAME", socket.gethostname()),
-                                                  "region": cfg.get("REDPROBE_REGION", ""), "version": VERSION, "kinds": enabled_kinds(cfg)}, signed=False)
+    try:
+        r = call(cfg, "POST", "/probe/v1/register", {"enroll_token": cfg["REDPROBE_ENROLL_TOKEN"], "name": cfg.get("REDPROBE_NAME", socket.gethostname()),
+                                                      "region": cfg.get("REDPROBE_REGION", ""), "version": VERSION, "kinds": enabled_kinds(cfg)}, signed=False)
+    except urllib.error.HTTPError as e:  # the server explains a refusal (bad token, probe outside Russia) in "message"
+        try:
+            msg = json.load(e).get("message") or ""
+        except Exception:
+            msg = ""
+        sys.exit(f"registration refused (HTTP {e.code}): {msg}" if msg else f"registration refused: HTTP {e.code}")
     cfg["REDPROBE_ID"], cfg["REDPROBE_SECRET"] = r["probe_id"], r["secret"]
     cfg.pop("REDPROBE_ENROLL_TOKEN", None)  # needed only to register, not kept
     save_conf(cfg)
