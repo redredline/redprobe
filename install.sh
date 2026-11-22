@@ -6,7 +6,7 @@
 set -e
 SERVER=${1:?backend URL}
 TOKEN=${2:?enroll token}
-NAME=${3:-$(hostname)}
+NAME=${3:-$(uname -n)}
 REGION=${4:-}
 command -v python3 >/dev/null || { echo "python3 is required"; exit 1; }
 DIR="$HOME/.local/share/redprobe"; CONF_DIR="$HOME/.config/redprobe"
@@ -38,8 +38,14 @@ WantedBy=default.target
 EOF
   systemctl --user daemon-reload
   systemctl --user enable --now redprobe.service
-  echo "redprobe runs as a user service. For start at boot without login: loginctl enable-linger $USER"
+  # without lingering, systemd stops user services (and the probe) at logout
+  if loginctl enable-linger 2>/dev/null; then
+    echo "redprobe runs as a user service and keeps running after logout and reboot"
+  else
+    echo "redprobe runs as a user service. To keep it running after logout and reboot: sudo loginctl enable-linger $(id -un)"
+  fi
 else
-  echo "systemd --user is not available. Add to crontab:"
+  echo "systemd --user is not available. Start the probe now and add the second line to crontab -e:"
+  echo "nohup python3 $DIR/redprobe.py >/dev/null 2>&1 &"
   echo "@reboot /usr/bin/env python3 $DIR/redprobe.py >/dev/null 2>&1"
 fi
