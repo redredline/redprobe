@@ -8,19 +8,20 @@ Red Atlas показывает, какие подсети хостеров се�
 
 ## Что проба делает
 
-Примерно раз в пять минут проба забирает у сервера Атласа пачку заданий, выполняет их и по HTTPS отправляет результаты обратно. Задания у неё двух видов.
+Примерно раз в пять минут проба забирает у сервера Атласа пачку заданий, выполняет их и по HTTPS отправляет результаты обратно. Задания у неё трёх видов.
 
 `atlas.ping` проверяет, отвечает ли один адрес в подсети /24 хостера, обычно шлюз .1 или .254. На этот же адрес смотрит карта Атласа. Если система разрешает пинг без root (настройка `net.ipv4.ping_group_range`), уходит один ICMP-запрос, иначе проба открывает TCP-соединение на порт 443, 80 или 22 и сразу его закрывает. Многие шлюзы отвечают только на пинг, а по TCP молчат, даже когда открыты, поэтому ответ «не отвечает» от пробы, которая работает через TCP, Атлас не учитывает. Как включить пинг, написано в разделе «Как подключиться». У хостеров, которые раздают клиентам всю /24 целиком, такой адрес может оказаться сервером клиента хостера.
 
+
 `atlas.tls1620` скачивает по TLS первые 256 КБ открытого тестового файла хостера (сейчас это файлы для проверки скорости у Hetzner, OVH и Vultr) и записывает, на каком объёме передача встала. Так видно, режет ли сеть соединение после первых 16-20 КБ. На сервере Атласа эта проверка пока выключена.
 
-В ICMP-пакете проба пишет слово `redprobe`, а в запросе к тестовому файлу представляется как `redprobe/0.2.3`, так что хостер может понять, кто к нему пришёл.
+В ICMP-пакете проба пишет слово `redprobe`, а в запросе к тестовому файлу представляется как `redprobe/0.3.1`, так что хостер может понять, кто к нему пришёл.
 
 ## Чего проба не делает
 
 Проба не открывает портов и ничего не слушает: все соединения она начинает сама. Root ей не нужен, из зависимостей только Python 3.8 или новее. Через неё не идёт чужой трафик, она не читает ваш трафик и не отправляет его содержимое. Среди адресов, к которым она обращается, бывают заблокированные в России, ради их поиска пробу и ставят. Страниц проба не открывает и ничего не скачивает, кроме тестовых файлов хостеров.
 
-Задания других видов проба пропускает, даже если сервер их пришлёт: выполняются только виды из настройки `REDPROBE_KINDS`, по умолчанию там `atlas.ping` и `atlas.tls1620`. Весь код лежит в одном файле `redprobe.py` на 307 строк.
+Задания других видов проба пропускает, даже если сервер их пришлёт: выполняются только виды из настройки `REDPROBE_KINDS`, по умолчанию там `atlas.ping`, `atlas.tls` и `atlas.tls1620`. Весь код лежит в одном файле `redprobe.py` на 934 строки.
 
 ## Сколько ресурсов уходит
 
@@ -87,6 +88,16 @@ IP-адрес пробы сервер Атласа видит, как любой
 
 Остановить пробу на время можно командой `systemctl --user stop redprobe`, запустить снова `systemctl --user start redprobe`.
 
+### Обновление
+
+Проба сама не обновляется. Чтобы поставить новую версию, скачайте файл и перезапустите сервис (настройки, id и секрет остаются прежними):
+
+```sh
+f=$HOME/.local/share/redprobe/redprobe.py; curl -fsSL https://raw.githubusercontent.com/redredline/redprobe/v0.3.1/redprobe.py -o $f.new && echo "a5d65d6bf9325ddfc3768b43f9350f7768b93e5f93378a7c8ce5856189ebc1a9  $f.new" | sha256sum -c - && mv $f.new $f && systemctl --user restart redprobe
+```
+
+Команда проверяет контрольную сумму файла и заменяет пробу только при совпадении. Если вы ставили пробу через `git clone`, можно и так: `git pull` в папке репозитория, затем `cp redprobe.py ~/.local/share/redprobe/` и `systemctl --user restart redprobe`.
+
 ### Удаление
 
 ```sh
@@ -105,7 +116,7 @@ systemctl --user daemon-reload
 - `REDPROBE_NAME` задаёт имя пробы, его видим только мы. По умолчанию берётся имя компьютера.
 - `REDPROBE_REGION` задаёт регион, например `ru-msk`.
 - `REDPROBE_ENROLL_TOKEN` хранит токен до регистрации, потом проба его стирает.
-- `REDPROBE_KINDS` перечисляет через запятую виды заданий, которые проба выполняет, по умолчанию `atlas.ping,atlas.tls1620`.
+- `REDPROBE_KINDS` перечисляет через запятую виды заданий, которые проба выполняет, по умолчанию `atlas.ping,atlas.tls,atlas.tls1620`. `REDPROBE_PROXY` и остальные `REDPROBE_PROXY_*` нужны только нашим мобильным точкам за прокси, волонтёрам они не нужны.
 - `REDPROBE_MAX_PPS` ограничивает, сколько проверок проба начинает за секунду, по умолчанию 20.
 - `REDPROBE_WORKERS` ограничивает, сколько проверок идёт одновременно, по умолчанию 16.
 - `REDPROBE_MAX_JOBS` задаёт, сколько заданий проба просит на одну пачку, по умолчанию 500.
@@ -160,19 +171,21 @@ redprobe is a measurement probe for [Red Atlas](https://atlas.redstudio.site) by
 
 ### What the probe does
 
-About every five minutes the probe fetches a batch of jobs from the Atlas server, runs them and sends the results back over HTTPS. There are two kinds of jobs.
+About every five minutes the probe fetches a batch of jobs from the Atlas server, runs them and sends the results back over HTTPS. There are three kinds of jobs.
 
 `atlas.ping` checks whether one address in a hoster's /24 answers, usually the gateway .1 or .254, the same address the Atlas map looks at. If the system allows unprivileged ping (`net.ipv4.ping_group_range`), the probe sends one ICMP echo; otherwise it opens a TCP connection to port 443, 80 or 22 and closes it at once. Many gateways answer ping only and stay silent over TCP even when reachable, so Atlas ignores "no answer" from a probe that works over TCP; how to enable ping is under How to join. At hosters that hand a whole /24 to customers, that address may belong to a customer's server.
 
+`atlas.tls` checks an address the way a client connects to it: it opens a TCP connection and then, depending on the service, makes a TLS handshake without sending data or starts the SSH key exchange and disconnects cleanly after the server's reply. That is 2-4 live addresses per /24, one connection per address per round, at most 20 connections a second. A ping is then only a hint that the address is alive and never makes a subnet open. One such check costs 1 to 9 KB of traffic (TCP about 1 KB, TLS about 6 KB, SSH about 9 KB). The server currently sends jobs of this kind only to our own points, and to volunteers' probes only by agreement.
+
 `atlas.tls1620` downloads the first 256 KB of a hoster's public speed test file over TLS (currently Hetzner, OVH and Vultr) and records where the transfer stalled, which shows whether the network cuts connections after the first 16-20 KB. This check is switched off on the Atlas server for now.
 
-ICMP packets carry the word `redprobe`, and requests for test files identify themselves as `redprobe/0.2.3`, so a hoster can tell where they come from.
+ICMP packets carry the word `redprobe`, and requests for test files identify themselves as `redprobe/0.3.1`, so a hoster can tell where they come from.
 
 ### What it does not do
 
 The probe opens no ports and listens on nothing; it only makes outbound connections. It needs no root and nothing beyond Python 3.8 or newer. It does not relay anyone's traffic, does not read your traffic and sends none of its content. Some of the addresses it contacts are blocked in Russia, which is what the measurements are meant to find. It opens no web pages and downloads nothing except the hosters' test files.
 
-The probe skips jobs of any other kind even if the server sends them: it runs only the kinds listed in `REDPROBE_KINDS`, which defaults to `atlas.ping` and `atlas.tls1620`. All the code is one 307-line file, `redprobe.py`.
+The probe skips jobs of any other kind even if the server sends them: it runs only the kinds listed in `REDPROBE_KINDS`, which defaults to `atlas.ping`, `atlas.tls` and `atlas.tls1620`. All the code is one 934-line file, `redprobe.py`.
 
 ### Resources
 
@@ -239,6 +252,16 @@ You need a Linux server or a home computer running Linux with Python 3.8 or newe
 
 To pause the probe run `systemctl --user stop redprobe`, and `systemctl --user start redprobe` to start it again.
 
+#### Updating
+
+The probe does not update itself. To install a new version, download the file and restart the service (settings, id and secret stay as they are):
+
+```sh
+f=$HOME/.local/share/redprobe/redprobe.py; curl -fsSL https://raw.githubusercontent.com/redredline/redprobe/v0.3.1/redprobe.py -o $f.new && echo "a5d65d6bf9325ddfc3768b43f9350f7768b93e5f93378a7c8ce5856189ebc1a9  $f.new" | sha256sum -c - && mv $f.new $f && systemctl --user restart redprobe
+```
+
+The command checks the file's checksum and replaces the probe only when it matches. If you installed with `git clone`, this works too: `git pull` in the repository folder, then `cp redprobe.py ~/.local/share/redprobe/` and `systemctl --user restart redprobe`.
+
 #### Removing it
 
 ```sh
@@ -257,7 +280,7 @@ Settings live in `~/.config/redprobe/redprobe.conf` as `KEY=value`; environment 
 - `REDPROBE_NAME` sets the probe name, which only we see. It defaults to the host name.
 - `REDPROBE_REGION` sets the region, for example `ru-msk`.
 - `REDPROBE_ENROLL_TOKEN` holds the token until registration, then the probe removes it.
-- `REDPROBE_KINDS` lists, comma separated, the job kinds the probe runs; the default is `atlas.ping,atlas.tls1620`.
+- `REDPROBE_KINDS` lists, comma separated, the job kinds the probe runs; the default is `atlas.ping,atlas.tls,atlas.tls1620`. `REDPROBE_PROXY` and the other `REDPROBE_PROXY_*` settings are for our own mobile points behind proxies; volunteers do not need them.
 - `REDPROBE_MAX_PPS` caps how many checks the probe starts per second, 20 by default.
 - `REDPROBE_WORKERS` caps how many checks run at the same time, 16 by default.
 - `REDPROBE_MAX_JOBS` sets how many jobs the probe asks for per batch, 500 by default.
