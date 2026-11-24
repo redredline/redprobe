@@ -15,7 +15,7 @@ Red Atlas показывает, какие подсети хостеров се�
 
 `atlas.tls1620` скачивает по TLS первые 256 КБ открытого тестового файла хостера (сейчас это файлы для проверки скорости у Hetzner, OVH и Vultr) и записывает, на каком объёме передача встала. Так видно, режет ли сеть соединение после первых 16-20 КБ. На сервере Атласа эта проверка пока выключена.
 
-В ICMP-пакете проба пишет слово `redprobe`, а в запросе к тестовому файлу представляется как `redprobe/0.3.1`, так что хостер может понять, кто к нему пришёл.
+В ICMP-пакете проба пишет слово `redprobe`, а в запросе к тестовому файлу представляется как `redprobe/0.3.2`, так что хостер может понять, кто к нему пришёл.
 
 ## Чего проба не делает
 
@@ -93,7 +93,7 @@ IP-адрес пробы сервер Атласа видит, как любой
 Проба сама не обновляется. Чтобы поставить новую версию, скачайте файл и перезапустите сервис (настройки, id и секрет остаются прежними):
 
 ```sh
-f=$HOME/.local/share/redprobe/redprobe.py; curl -fsSL https://raw.githubusercontent.com/redredline/redprobe/v0.3.1/redprobe.py -o $f.new && echo "a5d65d6bf9325ddfc3768b43f9350f7768b93e5f93378a7c8ce5856189ebc1a9  $f.new" | sha256sum -c - && mv $f.new $f && systemctl --user restart redprobe
+f=$HOME/.local/share/redprobe/redprobe.py; curl -fsSL https://raw.githubusercontent.com/redredline/redprobe/v0.3.2/redprobe.py -o $f.new && echo "0abdbd310125ad6b2f324ce370b145a19fa73bf544e1f853f22595e32e8282f4  $f.new" | sha256sum -c - && mv $f.new $f && systemctl --user restart redprobe
 ```
 
 Команда проверяет контрольную сумму файла и заменяет пробу только при совпадении. Если вы ставили пробу через `git clone`, можно и так: `git pull` в папке репозитория, затем `cp redprobe.py ~/.local/share/redprobe/` и `systemctl --user restart redprobe`.
@@ -116,7 +116,7 @@ systemctl --user daemon-reload
 - `REDPROBE_NAME` задаёт имя пробы, его видим только мы. По умолчанию берётся имя компьютера.
 - `REDPROBE_REGION` задаёт регион, например `ru-msk`.
 - `REDPROBE_ENROLL_TOKEN` хранит токен до регистрации, потом проба его стирает.
-- `REDPROBE_KINDS` перечисляет через запятую виды заданий, которые проба выполняет, по умолчанию `atlas.ping,atlas.tls,atlas.tls1620`. `REDPROBE_PROXY` и остальные `REDPROBE_PROXY_*` нужны только нашим мобильным точкам за прокси, волонтёрам они не нужны.
+- `REDPROBE_KINDS` перечисляет через запятую виды заданий, которые проба выполняет, по умолчанию `atlas.ping,atlas.tls,atlas.tls1620`. `REDPROBE_PROXY` и остальные `REDPROBE_PROXY_*` нужны только нашим мобильным точкам за прокси, волонтёрам они не нужны. Через прокси проба соединяется с адресом по имени вида `203-0-113-7.sslip.io`, которое указывает на тот же адрес: телефоны за частью мобильных прокси не открывают голый IP, а по имени открывают. TLS при этом идёт без имени сервера, как со всех точек. `REDPROBE_PROXY_IPNAME=` (пустое значение) это выключает.
 - `REDPROBE_MAX_PPS` ограничивает, сколько проверок проба начинает за секунду, по умолчанию 20.
 - `REDPROBE_WORKERS` ограничивает, сколько проверок идёт одновременно, по умолчанию 16.
 - `REDPROBE_MAX_JOBS` задаёт, сколько заданий проба просит на одну пачку, по умолчанию 500.
@@ -179,7 +179,7 @@ About every five minutes the probe fetches a batch of jobs from the Atlas server
 
 `atlas.tls1620` downloads the first 256 KB of a hoster's public speed test file over TLS (currently Hetzner, OVH and Vultr) and records where the transfer stalled, which shows whether the network cuts connections after the first 16-20 KB. This check is switched off on the Atlas server for now.
 
-ICMP packets carry the word `redprobe`, and requests for test files identify themselves as `redprobe/0.3.1`, so a hoster can tell where they come from.
+ICMP packets carry the word `redprobe`, and requests for test files identify themselves as `redprobe/0.3.2`, so a hoster can tell where they come from.
 
 ### What it does not do
 
@@ -257,7 +257,7 @@ To pause the probe run `systemctl --user stop redprobe`, and `systemctl --user s
 The probe does not update itself. To install a new version, download the file and restart the service (settings, id and secret stay as they are):
 
 ```sh
-f=$HOME/.local/share/redprobe/redprobe.py; curl -fsSL https://raw.githubusercontent.com/redredline/redprobe/v0.3.1/redprobe.py -o $f.new && echo "a5d65d6bf9325ddfc3768b43f9350f7768b93e5f93378a7c8ce5856189ebc1a9  $f.new" | sha256sum -c - && mv $f.new $f && systemctl --user restart redprobe
+f=$HOME/.local/share/redprobe/redprobe.py; curl -fsSL https://raw.githubusercontent.com/redredline/redprobe/v0.3.2/redprobe.py -o $f.new && echo "0abdbd310125ad6b2f324ce370b145a19fa73bf544e1f853f22595e32e8282f4  $f.new" | sha256sum -c - && mv $f.new $f && systemctl --user restart redprobe
 ```
 
 The command checks the file's checksum and replaces the probe only when it matches. If you installed with `git clone`, this works too: `git pull` in the repository folder, then `cp redprobe.py ~/.local/share/redprobe/` and `systemctl --user restart redprobe`.
@@ -280,7 +280,7 @@ Settings live in `~/.config/redprobe/redprobe.conf` as `KEY=value`; environment 
 - `REDPROBE_NAME` sets the probe name, which only we see. It defaults to the host name.
 - `REDPROBE_REGION` sets the region, for example `ru-msk`.
 - `REDPROBE_ENROLL_TOKEN` holds the token until registration, then the probe removes it.
-- `REDPROBE_KINDS` lists, comma separated, the job kinds the probe runs; the default is `atlas.ping,atlas.tls,atlas.tls1620`. `REDPROBE_PROXY` and the other `REDPROBE_PROXY_*` settings are for our own mobile points behind proxies; volunteers do not need them.
+- `REDPROBE_KINDS` lists, comma separated, the job kinds the probe runs; the default is `atlas.ping,atlas.tls,atlas.tls1620`. `REDPROBE_PROXY` and the other `REDPROBE_PROXY_*` settings are for our own mobile points behind proxies; volunteers do not need them. Through a proxy the probe connects to an address by a name like `203-0-113-7.sslip.io` that points at the same address: the phones behind some mobile proxies cannot open a bare IP but do open a name. TLS still goes without a server name, the same as from every other point. An empty `REDPROBE_PROXY_IPNAME=` turns this off.
 - `REDPROBE_MAX_PPS` caps how many checks the probe starts per second, 20 by default.
 - `REDPROBE_WORKERS` caps how many checks run at the same time, 16 by default.
 - `REDPROBE_MAX_JOBS` sets how many jobs the probe asks for per batch, 500 by default.

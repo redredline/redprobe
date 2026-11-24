@@ -57,7 +57,7 @@ import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import unquote, urlparse
 
-VERSION = "0.3.1"
+VERSION = "0.3.2"
 CONF = os.environ.get("REDPROBE_CONF", os.path.expanduser("~/.config/redprobe/redprobe.conf"))
 # The first address is a relay on a server in Russia: some Russian home ISPs cannot reach the Atlas server abroad.
 # When an address does not answer, the probe moves on to the next one and stays there while it works.
@@ -256,6 +256,25 @@ class Refused(Exception):
     """The target refused the connection (RST), or the proxy says so."""
 
 
+# Some mobile proxies (the phone behind them) cannot open an IP literal at all: CONNECT 203.0.113.7:443 gets «200»
+# from the proxy's front, then the phone fails (a SOCKS5 error 05 01 or an HTTP error inside the tunnel), while the same
+# server by a name opens. Seen 24.11.2026 on two of three operators. Through a proxy the probe therefore asks for a
+# name that resolves to the same address (203-0-113-7.sslip.io -> 203.0.113.7): the phone resolves it and connects.
+# TLS still goes without SNI, so the server sees the same ClientHello as from every other point.
+# REDPROBE_PROXY_IPNAME="" turns it off.
+PROXY_IPNAME = {"suffix": os.environ.get("REDPROBE_PROXY_IPNAME", ".sslip.io")}
+
+
+def _ipv4(host):
+    p = str(host).split(".")
+    return len(p) == 4 and all(x.isdigit() and int(x) < 256 for x in p)
+
+
+def proxy_leak(b):
+    """Bytes that came through a «200» tunnel instead of the server: the proxy's phone could not connect."""
+    return bool(b) and ((b[:1] == b"\x05" and len(b) <= 16) or b.startswith(b"HTTP/1."))
+
+
 def open_conn(host, port, timeout, proxy, meter):
     """A TCP connection to host:port, directly or through HTTP CONNECT. Raises socket.timeout / Refused / OSError
     for the target and ProxyError when the proxy cannot be used."""
@@ -265,6 +284,8 @@ def open_conn(host, port, timeout, proxy, meter):
             return socket.create_connection((host, int(port)), timeout=timeout)
         except ConnectionRefusedError:
             raise Refused("refused") from None
+    if PROXY_IPNAME["suffix"] and _ipv4(host):
+        host = host.replace(".", "-") + PROXY_IPNAME["suffix"]
     u = urlparse(proxy if "://" in proxy else "http://" + proxy)
     try:
         s = socket.create_connection((u.hostname, u.port or 8080), timeout=10)
@@ -442,9 +463,9 @@ class BioTLS:
                 if not b:
                     return "tls_answer" if self.got_tls else "tls_eof"
                 if not self.got_tls:
-                    # a mobile proxy whose device could not connect leaks a SOCKS5 failure reply into the tunnel
-                    # (05 01 00 01 ...) after its HTTP front said 200: that is «no connection», not a server reply
-                    if self.first[:1] == b"\x05" and len(b) <= 16:
+                    # a mobile proxy whose device could not connect leaks a SOCKS5 failure reply (05 01 00 01 ...)
+                    # or an HTTP error into the tunnel after its front said 200: «no connection», not a server reply
+                    if proxy_leak(b):
                         return "proxy_no_tcp"
                     return "tls_other"
             except ssl.SSLError:
@@ -567,8 +588,8 @@ def ssh_kex(s, timeout, meter, big=True):
             b = _recv(s, 4096, meter)
             if not b:
                 return "tcp_no_banner", info
-            if not buf and b[:1] == b"\x05" and len(b) <= 16:
-                return "proxy_no_tcp", info  # the mobile proxy's device could not connect (SOCKS5 failure reply)
+            if not buf and proxy_leak(b):
+                return "proxy_no_tcp", info  # the mobile proxy's device could not connect (SOCKS5 / HTTP error)
             buf += b
     except (socket.timeout, OSError):
         return "tcp_no_banner", info
@@ -649,6 +670,17 @@ def check(host, port, mode, proxy=None, sni=None, timeout=8.0, big=True):
         elif mode == "ssh":
             out, info = ssh_kex(s, timeout, m, big=big)
             res.update(info)
+        elif proxy:
+            # through a proxy «200» alone proves nothing: its phone may connect only when data comes, and fail then.
+            # A server that speaks first (an SSH or FTP banner) is a connection; a SOCKS / HTTP error from the phone is
+            # not; silence says nothing either way, so it is not counted (the TLS / SSH checks carry the mobile column)
+            out = "tcp_unverified"
+            try:
+                s.settimeout(2.0)
+                b = _recv(s, 64, m)
+                out = "proxy_no_tcp" if proxy_leak(b) else ("tcp_ok" if b else "tcp_unverified")
+            except (socket.timeout, OSError):
+                pass
         else:
             out = "tcp_ok"
     finally:
@@ -656,7 +688,10 @@ def check(host, port, mode, proxy=None, sni=None, timeout=8.0, big=True):
             s.close()
         except OSError:
             pass
-    res.update(outcome=out, ok=out in OK_OUT, rtt=round((time.time() - t0) * 1000, 1), bytes=m.wire())
+    res.update(outcome=out, ok=None if out == "tcp_unverified" else out in OK_OUT,
+               rtt=round((time.time() - t0) * 1000, 1), bytes=m.wire())
+    if out == "tcp_unverified":
+        res["uncounted"] = 1
     return res
 
 
@@ -789,15 +824,26 @@ def safe_job(j, *a):
         return {"job_id": j.get("id"), "kind": j.get("kind"), "ok": None, "error": str(e)[:120]}
 
 
+_canary = {"ok_until": 0.0}
+
+
 def canary(cfg, proxy):
-    """Through a proxy: is the proxy itself working right now? A TCP connect to REDPROBE_CANARY (default
-    1.1.1.1:443), about 300 bytes. Without it a dead proxy would look like a blocked internet."""
+    """Through a proxy: is the proxy and its phone working right now? A TLS handshake with REDPROBE_CANARY (default
+    1.1.1.1:443, by the same name route as the targets), about 4.5 KB, at most once in REDPROBE_CANARY_SECS (600).
+    A bare TCP connect is not enough: the proxy's front says «200» even when its phone cannot connect. Without the
+    canary a dead proxy would look like a blocked internet."""
+    if time.time() < _canary["ok_until"]:
+        return True, 0
     host, _, port = cfg.get("REDPROBE_CANARY", "1.1.1.1:443").rpartition(":")
+    spent = 0
     for _ in range(2):
-        r = check(host, int(port or 443), "tcp", proxy, timeout=8)
+        r = check(host, int(port or 443), "tls", proxy, timeout=8)
+        spent += r.get("bytes", 0)
         if r.get("ok"):
-            return True, r.get("bytes", 0)
-    return False, r.get("bytes", 0)
+            _canary["ok_until"] = time.time() + int(cfg.get("REDPROBE_CANARY_SECS", "600"))
+            return True, spent
+    _canary["ok_until"] = 0.0
+    return False, spent
 
 
 def once(cfg, budget=None):
@@ -897,6 +943,8 @@ def live_loop(cfg):
 
 def main():
     cfg = load_conf()
+    if "REDPROBE_PROXY_IPNAME" in cfg:
+        PROXY_IPNAME["suffix"] = cfg["REDPROBE_PROXY_IPNAME"]
     if "--test" in sys.argv:
         a = sys.argv[sys.argv.index("--test") + 1:]
         host, port, mode = a[0], int(a[1]) if len(a) > 1 else 443, a[2] if len(a) > 2 else "tls"
